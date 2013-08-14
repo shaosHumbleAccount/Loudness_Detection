@@ -7,8 +7,10 @@ import math
 from time import sleep
 from std_msgs.msg import String, Float32
 from threading import RLock
+from dynamic_reconfigure.server import Server as DynamicReconfigureServer
+from audio_interface.cfg import audio_interfaceConfig
 
-INITIAL_TAP_THRESHOLD = 0.1
+
 FORMAT = pyaudio.paInt16 
 SHORT_NORMALIZE = (1.0/32768.0)
 CHANNELS = 2
@@ -38,10 +40,10 @@ def get_rms( block ):
     return math.sqrt( sum_squares / count )
 
 class Audio_Listener(object):
+    LOUDNESS_THRESHOLD = 0.1
     def __init__(self):
         self.pa = pyaudio.PyAudio()
         self.stream = self.open_mic_stream()
-        self.tap_threshold = INITIAL_TAP_THRESHOLD
         self.latestAmplitude = 0
         self.lock = RLock()
         
@@ -59,7 +61,6 @@ class Audio_Listener(object):
                     print( "Found an input: device %d - %s"%(i,devinfo["name"]) )
                     device_index = i
                     return device_index
-
         if device_index == None:
             print( "No preferred input found; using default input device." )
 
@@ -89,7 +90,7 @@ class Audio_Listener(object):
             amplitude = get_rms( block )
             self.latestAmplitude = amplitude
             #print amplitude
-            if amplitude > self.tap_threshold:
+            if amplitude > Audio_Listener.LOUDNESS_THRESHOLD:
                 print "Oh, your loudness is: " + str(amplitude)
                 # noisy block
             else:            
@@ -100,7 +101,6 @@ class Audio_Listener(object):
     
 def audio_listener():
     pub = rospy.Publisher('Loudness', Float32)
-    rospy.init_node('audio_listener')
     listener = Audio_Listener()
 
     # pass a generator in "emitter" to produce data for the update func
@@ -109,8 +109,14 @@ def audio_listener():
         pub.publish(Float32(loudness))
         rospy.sleep(0.01)
 
-    
+def reconfig_callback(config, level):
+    print "New Threshould: " + str(config.loudness_threshold)
+    Audio_Listener.LOUDNESS_THRESHOLD = config.loudness_threshold
+    return config
+
 if __name__ == "__main__":
+    rospy.init_node("audio_interface", anonymous = False)
+    srv = DynamicReconfigureServer(audio_interfaceConfig, reconfig_callback)
     audio_listener()
     
 
