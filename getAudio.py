@@ -19,13 +19,13 @@ INPUT_BLOCK_TIME = 0.1
 INPUT_FRAMES_PER_BLOCK = int(RATE*INPUT_BLOCK_TIME)
 
 def get_rms( block ):
-    # RMS amplitude is defined as the square root of the 
-    # mean over time of the square of the amplitude.
-    # so we need to convert this string of bytes into 
-    # a string of 16-bit samples...
-
-    # we will get one short out for each 
-    # two chars in the string.
+    """ RMS amplitude is defined as the square root of the 
+     mean over time of the square of the amplitude.
+     so we need to convert this string of bytes into 
+     a string of 16-bit samples...
+     we will get one short out for each 
+     two chars in the string."""
+     
     count = len(block)/2
     format = "%dh"%(count)
     shorts = struct.unpack( format, block )
@@ -41,11 +41,12 @@ def get_rms( block ):
 
 class Audio_Listener(object):
     LOUDNESS_THRESHOLD = 0.1
+    lock = RLock()
+    
     def __init__(self):
         self.pa = pyaudio.PyAudio()
         self.stream = self.open_mic_stream()
         self.latestAmplitude = 0
-        self.lock = RLock()
         
     def stop(self):
         self.stream.close()
@@ -68,24 +69,20 @@ class Audio_Listener(object):
 
     def open_mic_stream( self ):
         device_index = self.find_input_device()
-
         stream = self.pa.open(   format = FORMAT,
                                  channels = CHANNELS,
                                  rate = RATE,
                                  input = True,
                                  input_device_index = device_index,
                                  frames_per_buffer = INPUT_FRAMES_PER_BLOCK)
-
         return stream
 
     def listen(self):
-        with self.lock:
+        with Audio_Listener.lock:
             try:
                 block = self.stream.read(INPUT_FRAMES_PER_BLOCK)
             except IOError, e:
-                self.errorcount += 1
-                print( "(%d) Error recording: %s"%(self.errorcount,e) )
-                self.noisycount = 1
+                print( "Error recording: %s"%(e,) )
                 return
             amplitude = get_rms( block )
             self.latestAmplitude = amplitude
@@ -99,20 +96,22 @@ class Audio_Listener(object):
             return amplitude
     
     
+def reconfig_callback(config, level):
+    with Audio_Listener.lock:
+        print "New Threshould: " + str(config.loudness_threshold)
+        Audio_Listener.LOUDNESS_THRESHOLD = config.loudness_threshold
+        return config
+
 def audio_listener():
     pub = rospy.Publisher('Loudness', Float32)
     listener = Audio_Listener()
-
-    # pass a generator in "emitter" to produce data for the update func
+    #keep publishing the loudness, and push alarm when over the threshold
     while not rospy.is_shutdown():
         loudness = listener.listen()
         pub.publish(Float32(loudness))
         rospy.sleep(0.01)
 
-def reconfig_callback(config, level):
-    print "New Threshould: " + str(config.loudness_threshold)
-    Audio_Listener.LOUDNESS_THRESHOLD = config.loudness_threshold
-    return config
+
 
 if __name__ == "__main__":
     rospy.init_node("audio_interface", anonymous = False)
